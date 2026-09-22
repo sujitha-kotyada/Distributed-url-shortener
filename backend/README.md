@@ -5,6 +5,7 @@ Backend foundation for the Distributed URL Shortener & Analytics Platform.
 ## Requirements
 
 - Python 3.13+
+- PostgreSQL
 
 ## Setup
 
@@ -27,6 +28,26 @@ Copy the example environment file when local overrides are needed:
 Copy-Item .env.example .env
 ```
 
+Configure `DATABASE_URL` in `.env` with a PostgreSQL connection string:
+
+```text
+DATABASE_URL=postgresql+psycopg://url_shortener:change-me@localhost:5432/url_shortener
+```
+
+## Database Migrations
+
+Apply migrations:
+
+```powershell
+python -m alembic upgrade head
+```
+
+Create a new migration after model changes:
+
+```powershell
+python -m alembic revision --autogenerate -m "describe change"
+```
+
 ## Run The API
 
 ```powershell
@@ -37,7 +58,11 @@ The health endpoint is available at:
 
 ```text
 GET /health
+GET /health/db
 ```
+
+The database health check returns `503 Service Unavailable` when `DATABASE_URL`
+is missing or PostgreSQL cannot be reached.
 
 ## Run Tests
 
