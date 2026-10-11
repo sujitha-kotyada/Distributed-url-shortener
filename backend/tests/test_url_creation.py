@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -99,6 +100,53 @@ def test_create_short_url_uses_allocated_id(
 
     assert created.id == 62
     assert created.short_code == "10"
+
+
+def test_known_short_code_redirects_to_original_url(
+    client: TestClient,
+) -> None:
+    create_response = client.post(
+        "/api/v1/urls",
+        json={"url": "https://example.com/redirect-target"},
+    )
+    short_code = create_response.json()["short_code"]
+
+    response = client.get(f"/{short_code}", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://example.com/redirect-target"
+    assert response.content == b""
+
+
+def test_unknown_short_code_returns_not_found(client: TestClient) -> None:
+    response = client.get("/does-not-exist", follow_redirects=False)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Short URL not found."}
+
+
+def test_unusual_short_code_is_handled_as_opaque_value(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    short_code = "A_b-~.!"
+    with session_factory() as session:
+        session.add(
+            Url(
+                id=99,
+                short_code=short_code,
+                original_url="https://example.com/unusual-code",
+            )
+        )
+        session.commit()
+
+    response = client.get(
+        f"/{quote(short_code, safe='')}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://example.com/unusual-code"
 
 
 def test_sequence_allocator_does_not_fall_back_to_sqlite(

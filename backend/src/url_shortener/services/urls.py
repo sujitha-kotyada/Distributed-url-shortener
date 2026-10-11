@@ -1,4 +1,4 @@
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -8,6 +8,22 @@ from url_shortener.utils.base62 import encode_base62
 
 class UrlCreationError(RuntimeError):
     """Raised when a shortened URL cannot be created safely."""
+
+
+class UrlLookupError(RuntimeError):
+    """Raised when a shortened URL cannot be looked up safely."""
+
+
+def get_url_by_short_code(
+    *,
+    session: Session,
+    short_code: str,
+) -> Url | None:
+    try:
+        return session.scalar(select(Url).where(Url.short_code == short_code))
+    except SQLAlchemyError as exc:
+        session.rollback()
+        raise UrlLookupError("Database error while looking up URL.") from exc
 
 
 def allocate_url_id(session: Session) -> int:
