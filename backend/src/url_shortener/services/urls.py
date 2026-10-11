@@ -2,6 +2,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from url_shortener.core.cache import RedirectCache, RedisCacheError
 from url_shortener.models.url import Url
 from url_shortener.utils.base62 import encode_base62
 
@@ -24,6 +25,33 @@ def get_url_by_short_code(
     except SQLAlchemyError as exc:
         session.rollback()
         raise UrlLookupError("Database error while looking up URL.") from exc
+
+
+def resolve_redirect_target(
+    *,
+    session: Session,
+    short_code: str,
+    cache: RedirectCache | None,
+) -> str | None:
+    if cache is not None:
+        try:
+            cached_url = cache.get(short_code)
+        except RedisCacheError:
+            cached_url = None
+        if cached_url is not None:
+            return cached_url
+
+    url = get_url_by_short_code(session=session, short_code=short_code)
+    if url is None:
+        return None
+
+    if cache is not None:
+        try:
+            cache.set(short_code, url.original_url)
+        except RedisCacheError:
+            pass
+
+    return url.original_url
 
 
 def allocate_url_id(session: Session) -> int:
