@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     app_name: str = "Distributed URL Shortener"
     environment: str = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    base_url: str = Field(
+        default="http://localhost:8000",
+        validation_alias=AliasChoices("BASE_URL", "URL_SHORTENER_BASE_URL"),
+    )
     database_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("DATABASE_URL", "URL_SHORTENER_DATABASE_URL"),
