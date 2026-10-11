@@ -1,12 +1,19 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from url_shortener.core.database import get_session
+from url_shortener.services.analytics import (
+    AnalyticsRecordingError,
+    RedirectAnalytics,
+)
 from url_shortener.services.urls import UrlLookupError, resolve_redirect_target
 
 
 router = APIRouter(tags=["redirects"])
+logger = logging.getLogger(__name__)
 
 
 @router.get(
@@ -36,6 +43,12 @@ def redirect_short_url(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Short URL not found.",
         )
+
+    analytics: RedirectAnalytics = request.app.state.redirect_analytics
+    try:
+        analytics.record_redirect(session=session, short_code=short_code)
+    except AnalyticsRecordingError:
+        logger.warning("Redirect analytics recording failed.")
 
     return RedirectResponse(
         url=original_url,

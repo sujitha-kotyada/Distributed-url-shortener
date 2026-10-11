@@ -8,12 +8,14 @@ from url_shortener.api.v1.urls import router as urls_router
 from url_shortener.core.cache import create_redirect_cache
 from url_shortener.core.config import get_settings
 from url_shortener.core.logging import configure_logging
+from url_shortener.services.analytics import PostgresRedirectAnalytics
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cache = create_redirect_cache(get_settings())
     app.state.redirect_cache = cache
+    app.state.redirect_analytics = PostgresRedirectAnalytics()
     try:
         yield
     finally:

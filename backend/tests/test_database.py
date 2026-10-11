@@ -1,6 +1,7 @@
 from sqlalchemy import Boolean, DateTime, Integer, String, Text
 
 from url_shortener.models.base import Base
+from url_shortener.models.redirect_event import RedirectEvent
 from url_shortener.models.url import Url
 
 
@@ -43,3 +44,11 @@ def test_url_model_has_unique_short_code_constraint() -> None:
 
     unique_constraint = constraints["uq_urls_short_code"]
     assert [column.name for column in unique_constraint.columns] == ["short_code"]
+
+
+def test_redirect_event_model_has_url_foreign_key() -> None:
+    assert RedirectEvent.__table__.columns["short_code"].nullable is False
+    foreign_keys = RedirectEvent.__table__.columns["short_code"].foreign_keys
+
+    assert len(foreign_keys) == 1
+    assert next(iter(foreign_keys)).target_fullname == "urls.short_code"

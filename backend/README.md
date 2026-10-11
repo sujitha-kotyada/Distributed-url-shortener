@@ -64,6 +64,17 @@ GET /health/db
 The database health check returns `503 Service Unavailable` when `DATABASE_URL`
 is missing or PostgreSQL cannot be reached.
 
+## Redirect Analytics
+
+Each successful redirect records one `redirect_events` row with the resolved
+URL's stable `short_code` and a server-generated UTC `occurred_at` timestamp.
+Unknown short codes and health or URL creation requests do not create events.
+
+Analytics persistence is synchronous and best effort: a failed analytics write
+is rolled back and logged while the valid redirect still succeeds. An event may
+therefore be lost when the write fails; guaranteed delivery and background
+processing are not implemented yet.
+
 ## Run Tests
 
 ```powershell
