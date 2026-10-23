@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: "Distributed URL Shortener Dashboards"
+    orgId: 1
+    folder: "Platform Telemetry"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 15
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

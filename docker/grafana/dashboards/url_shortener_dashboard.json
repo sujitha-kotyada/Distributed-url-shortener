@@ -1,0 +1,98 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Total HTTP Requests",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(url_shortener_http_requests_total)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Total Short Link Redirects",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(url_shortener_redirects_total)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Redis Cache Hit Ratio",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(url_shortener_cache_hits_total) / (sum(url_shortener_cache_hits_total) + sum(url_shortener_cache_misses_total)) * 100",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Worker Stream Processing",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(url_shortener_worker_processed_total)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "HTTP Traffic Breakdown by Route & Status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "expr": "sum by (path, status) (rate(url_shortener_http_requests_total[1m]))",
+          "legendFormat": "{{path}} ({{status}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Cache Performance Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        {
+          "expr": "rate(url_shortener_cache_hits_total[1m])",
+          "legendFormat": "Hits / sec",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(url_shortener_cache_misses_total[1m])",
+          "legendFormat": "Misses / sec",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["url-shortener", "telemetry"],
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Distributed URL Shortener & Analytics Dashboard",
+  "version": 1
+}
