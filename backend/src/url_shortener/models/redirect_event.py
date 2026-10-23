@@ -17,6 +17,7 @@ class RedirectEvent(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
     short_code: Mapped[str] = mapped_column(
         String(32),
         ForeignKey("urls.short_code", ondelete="RESTRICT"),

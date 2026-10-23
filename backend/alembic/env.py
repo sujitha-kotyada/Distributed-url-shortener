@@ -5,7 +5,9 @@ from sqlalchemy import engine_from_config, pool
 
 from url_shortener.core.config import get_settings
 from url_shortener.models.base import Base
+from url_shortener.models.redirect_event import RedirectEvent
 from url_shortener.models.url import Url
+from url_shortener.models.user import User
 
 
 config = context.config

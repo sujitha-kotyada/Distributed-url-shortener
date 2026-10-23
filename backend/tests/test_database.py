@@ -48,6 +48,9 @@ def test_url_model_has_unique_short_code_constraint() -> None:
 
 def test_redirect_event_model_has_url_foreign_key() -> None:
     assert RedirectEvent.__table__.columns["short_code"].nullable is False
+    assert RedirectEvent.__table__.columns["event_id"].nullable is False
+    assert RedirectEvent.__table__.columns["event_id"].type.length == 36
+    assert RedirectEvent.__table__.columns["event_id"].unique is True
     foreign_keys = RedirectEvent.__table__.columns["short_code"].foreign_keys
 
     assert len(foreign_keys) == 1

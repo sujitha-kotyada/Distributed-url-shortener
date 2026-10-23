@@ -1,9 +1,13 @@
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from url_shortener.models.base import Base
+
+if TYPE_CHECKING:
+    from url_shortener.models.user import User
 
 
 class Url(Base):
@@ -20,3 +24,11 @@ class Url(Base):
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    user: Mapped["User | None"] = relationship("User", back_populates="urls")

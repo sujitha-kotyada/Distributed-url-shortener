@@ -16,8 +16,10 @@ from url_shortener.models.url import Url
 from url_shortener.services.analytics import (
     AnalyticsRecordingError,
     PostgresRedirectAnalytics,
+    RedirectEventMessage,
 )
 from url_shortener.services import urls as url_service
+from url_shortener.services.streams import AnalyticsPublishError
 from url_shortener.services.urls import UrlLookupError
 
 
@@ -32,17 +34,25 @@ class FakeRedirectCache:
         self.values[short_code] = original_url
 
 
-class FailingAnalytics:
-    def record_redirect(self, *, session: Session, short_code: str) -> None:
-        raise AnalyticsRecordingError("analytics unavailable")
+class FakeEventPublisher:
+    def __init__(self) -> None:
+        self.events: list[RedirectEventMessage] = []
+
+    def publish(self, event: RedirectEventMessage) -> None:
+        self.events.append(event)
 
 
-class RecordingAnalytics:
+class FailingEventPublisher:
+    def publish(self, event: RedirectEventMessage) -> None:
+        raise AnalyticsPublishError("stream unavailable")
+
+
+class RecordingPublisher:
     def __init__(self) -> None:
         self.short_codes: list[str] = []
 
-    def record_redirect(self, *, session: Session, short_code: str) -> None:
-        self.short_codes.append(short_code)
+    def publish(self, event: RedirectEventMessage) -> None:
+        self.short_codes.append(event.short_code)
 
 
 @pytest.fixture
@@ -59,9 +69,10 @@ def session_factory() -> sessionmaker[Session]:
 @pytest.fixture
 def client(
     session_factory: sessionmaker[Session],
-) -> Generator[tuple[TestClient, FakeRedirectCache], None, None]:
+) -> Generator[tuple[TestClient, FakeRedirectCache, FakeEventPublisher], None, None]:
     app = create_app()
     cache = FakeRedirectCache()
+    publisher = FakeEventPublisher()
 
     def override_get_session() -> Generator[Session, None, None]:
         with session_factory() as session:
@@ -71,7 +82,8 @@ def client(
 
     with TestClient(app) as test_client:
         app.state.redirect_cache = cache
-        yield test_client, cache
+        app.state.analytics_publisher = publisher
+        yield test_client, cache, publisher
 
     app.dependency_overrides.clear()
 
@@ -94,39 +106,37 @@ def get_events(session_factory: sessionmaker[Session]) -> list[RedirectEvent]:
 
 
 def test_redirect_persists_one_event_on_cache_miss(
-    client: tuple[TestClient, FakeRedirectCache],
+    client: tuple[TestClient, FakeRedirectCache, FakeEventPublisher],
     session_factory: sessionmaker[Session],
 ) -> None:
-    test_client, cache = client
+    test_client, cache, publisher = client
     add_url(session_factory, "miss")
 
     response = test_client.get("/miss", follow_redirects=False)
 
     assert response.status_code == 307
     assert cache.values["miss"] == "https://example.com/analytics-target"
-    events = get_events(session_factory)
-    assert len(events) == 1
-    assert events[0].short_code == "miss"
+    assert len(publisher.events) == 1
+    assert publisher.events[0].short_code == "miss"
 
 
 def test_redirect_persists_one_event_on_cache_hit(
-    client: tuple[TestClient, FakeRedirectCache],
+    client: tuple[TestClient, FakeRedirectCache, FakeEventPublisher],
     session_factory: sessionmaker[Session],
 ) -> None:
-    test_client, cache = client
+    test_client, cache, publisher = client
     add_url(session_factory, "hit")
     cache.values["hit"] = "https://example.com/analytics-target"
 
     response = test_client.get("/hit", follow_redirects=False)
 
     assert response.status_code == 307
-    events = get_events(session_factory)
-    assert len(events) == 1
-    assert events[0].short_code == "hit"
+    assert len(publisher.events) == 1
+    assert publisher.events[0].short_code == "hit"
 
 
 def test_unknown_short_code_does_not_persist_event(
-    client: tuple[TestClient, FakeRedirectCache],
+    client: tuple[TestClient, FakeRedirectCache, FakeEventPublisher],
     session_factory: sessionmaker[Session],
 ) -> None:
     response = client[0].get("/missing", follow_redirects=False)
@@ -136,12 +146,12 @@ def test_unknown_short_code_does_not_persist_event(
 
 
 def test_redirect_succeeds_when_analytics_persistence_fails(
-    client: tuple[TestClient, FakeRedirectCache],
+    client: tuple[TestClient, FakeRedirectCache, FakeEventPublisher],
     session_factory: sessionmaker[Session],
 ) -> None:
-    test_client, _ = client
+    test_client, _, _ = client
     add_url(session_factory, "analytics-failure")
-    test_client.app.state.redirect_analytics = FailingAnalytics()
+    test_client.app.state.analytics_publisher = FailingEventPublisher()
 
     response = test_client.get("/analytics-failure", follow_redirects=False)
 
@@ -151,12 +161,12 @@ def test_redirect_succeeds_when_analytics_persistence_fails(
 
 
 def test_redirect_lookup_failure_is_not_treated_as_analytics_failure(
-    client: tuple[TestClient, FakeRedirectCache],
+    client: tuple[TestClient, FakeRedirectCache, FakeEventPublisher],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    test_client, _ = client
-    analytics = RecordingAnalytics()
-    test_client.app.state.redirect_analytics = analytics
+    test_client, _, _ = client
+    publisher = RecordingPublisher()
+    test_client.app.state.analytics_publisher = publisher
 
     def fail_lookup(*, session: Session, short_code: str) -> Url | None:
         raise UrlLookupError("lookup failed")
@@ -167,7 +177,7 @@ def test_redirect_lookup_failure_is_not_treated_as_analytics_failure(
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Could not look up URL."}
-    assert analytics.short_codes == []
+    assert publisher.short_codes == []
 
 
 def test_postgres_analytics_rolls_back_failed_write() -> None:
@@ -175,9 +185,13 @@ def test_postgres_analytics_rolls_back_failed_write() -> None:
     session.commit.side_effect = SQLAlchemyError("write failed")
 
     with pytest.raises(AnalyticsRecordingError):
-        PostgresRedirectAnalytics().record_redirect(
+        PostgresRedirectAnalytics().record_event(
             session=session,
-            short_code="abc",
+            event=RedirectEventMessage(
+                event_id="00000000-0000-0000-0000-000000000001",
+                short_code="abc",
+                occurred_at="2026-10-11T00:00:00Z",
+            ),
         )
 
     session.rollback.assert_called_once()

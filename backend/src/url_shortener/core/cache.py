@@ -17,6 +17,8 @@ class RedirectCache(Protocol):
 
     def set(self, short_code: str, original_url: str) -> None: ...
 
+    def delete(self, short_code: str) -> None: ...
+
 
 class RedisRedirectCache:
     def __init__(self, client: redis.Redis, ttl_seconds: int) -> None:
@@ -42,6 +44,12 @@ class RedisRedirectCache:
             )
         except redis.RedisError as exc:
             raise RedisCacheError("Redis write failed.") from exc
+
+    def delete(self, short_code: str) -> None:
+        try:
+            self._client.delete(self.key_for(short_code))
+        except redis.RedisError as exc:
+            raise RedisCacheError("Redis delete failed.") from exc
 
     def close(self) -> None:
         self._client.close()
