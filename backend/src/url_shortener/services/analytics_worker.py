@@ -1,5 +1,6 @@
 import json
 import logging
+import signal
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from threading import Event
@@ -200,30 +201,60 @@ class RedirectAnalyticsWorker:
         for _, messages in response:
             self._process_messages(messages)
 
-    def run_forever(self) -> None:
-        ensure_consumer_group(
-            self._client,
-            stream_name=self._stream_name,
-            group_name=self._group_name,
-        )
+    def run_forever(self, *, poll_timeout_backoff_seconds: float = 1.0) -> None:
+        while True:
+            try:
+                ensure_consumer_group(
+                    self._client,
+                    stream_name=self._stream_name,
+                    group_name=self._group_name,
+                )
+                break
+            except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as exc:
+                logger.warning(
+                    "Redis unavailable while initializing consumer group: %s. Retrying...",
+                    exc,
+                )
+                if self._stop_requested.wait(poll_timeout_backoff_seconds):
+                    return
+
         while not self._stop_requested.is_set():
-            self.process_pending()
-            if not self._stop_requested.is_set():
-                self.process_available()
+            try:
+                self.process_pending()
+                if not self._stop_requested.is_set():
+                    self.process_available()
+            except redis.exceptions.TimeoutError as exc:
+                logger.warning(
+                    "Recoverable Redis timeout encountered during stream processing: %s.",
+                    exc,
+                )
+                if self._stop_requested.wait(poll_timeout_backoff_seconds):
+                    break
+            except redis.exceptions.ConnectionError as exc:
+                logger.warning(
+                    "Redis connection error encountered during stream processing: %s. Retrying...",
+                    exc,
+                )
+                if self._stop_requested.wait(poll_timeout_backoff_seconds):
+                    break
 
 
-def create_worker(settings: Settings) -> RedirectAnalyticsWorker:
+def create_worker(
+    settings: Settings,
+    *,
+    session_factory=None,
+) -> RedirectAnalyticsWorker:
     if settings.redis_url is None:
         raise RuntimeError("REDIS_URL must be set to run the analytics worker.")
     client = redis.Redis.from_url(
         settings.redis_url,
         decode_responses=True,
-        socket_timeout=settings.redis_socket_timeout_seconds,
+        socket_timeout=settings.analytics_socket_timeout_seconds,
         socket_connect_timeout=settings.redis_socket_connect_timeout_seconds,
     )
     return RedirectAnalyticsWorker(
         client=client,
-        session_factory=create_session_factory(),
+        session_factory=session_factory or create_session_factory(),
         stream_name=settings.analytics_stream_name,
         group_name=settings.analytics_consumer_group,
         consumer_name=settings.analytics_consumer_name,
@@ -242,6 +273,17 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     worker = create_worker(settings)
+
+    def handle_signal(signum, frame) -> None:
+        logger.info("Received termination signal %s, stopping worker...", signum)
+        worker.stop()
+
+    try:
+        signal.signal(signal.SIGTERM, handle_signal)
+        signal.signal(signal.SIGINT, handle_signal)
+    except (ValueError, AttributeError):
+        pass
+
     try:
         worker.run_forever()
     except (KeyboardInterrupt, SystemExit):

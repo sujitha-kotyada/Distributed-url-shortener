@@ -1,3 +1,5 @@
+import threading
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -14,8 +16,10 @@ from url_shortener.services.analytics import (
     PostgresRedirectAnalytics,
     RedirectEventMessage,
 )
+from url_shortener.core.config import Settings
 from url_shortener.services.analytics_worker import (
     RedirectAnalyticsWorker,
+    create_worker,
     ensure_consumer_group,
 )
 from url_shortener.services.streams import RedisRedirectEventPublisher
@@ -323,3 +327,187 @@ def test_worker_xpending_failure_falls_back_to_local_retry_count(
     assert worker.process_message(msg_id, event_fields()) is True
     assert client.acknowledged == [msg_id]
     assert len(client.added) == 1
+
+
+def test_create_worker_configures_dedicated_worker_socket_timeout(
+    session_factory: sessionmaker[Session],
+) -> None:
+    settings = Settings(
+        redis_url="redis://localhost:6379/0",
+        redis_socket_timeout_seconds=0.5,
+        redis_socket_connect_timeout_seconds=0.75,
+        analytics_socket_timeout_seconds=5.0,
+        analytics_read_block_ms=1000,
+    )
+    worker = create_worker(settings, session_factory=session_factory)
+    try:
+        pool_kwargs = worker._client.connection_pool.connection_kwargs
+        assert pool_kwargs["socket_timeout"] == 5.0
+        assert pool_kwargs["socket_connect_timeout"] == 0.75
+        assert pool_kwargs["decode_responses"] is True
+        assert worker._read_block_ms == 1000
+    finally:
+        worker.close()
+
+
+def test_worker_run_forever_recovers_from_transient_redis_timeout(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = FakeRedis()
+    call_count = 0
+
+    def fail_once_then_stop(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        worker.stop()
+        raise redis.exceptions.TimeoutError("Timeout reading from socket")
+
+    client.xreadgroup = fail_once_then_stop
+    worker = make_worker(client, session_factory)
+
+    # run_forever should catch TimeoutError, log warning, check stop_requested, and return cleanly
+    worker.run_forever(poll_timeout_backoff_seconds=0.01)
+
+    assert call_count == 1
+    assert worker._stop_requested.is_set()
+
+
+def test_worker_run_forever_recovers_from_transient_redis_connection_error(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = FakeRedis()
+    call_count = 0
+
+    def fail_once_then_stop(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        worker.stop()
+        raise redis.exceptions.ConnectionError("Connection closed by remote host")
+
+    client.xreadgroup = fail_once_then_stop
+    worker = make_worker(client, session_factory)
+
+    worker.run_forever(poll_timeout_backoff_seconds=0.01)
+
+    assert call_count == 1
+    assert worker._stop_requested.is_set()
+
+
+def test_worker_run_forever_surfaces_unrecoverable_redis_error(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = FakeRedis()
+
+    def fail_with_response_error(*args, **kwargs):
+        raise ResponseError("WRONGTYPE Operation against a key holding the wrong kind of value")
+
+    client.xreadgroup = fail_with_response_error
+    worker = make_worker(client, session_factory)
+
+    with pytest.raises(ResponseError, match="WRONGTYPE"):
+        worker.run_forever(poll_timeout_backoff_seconds=0.01)
+
+
+def test_worker_run_forever_recovers_from_repeated_failures_then_processes(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = FakeRedis()
+    attempts = 0
+
+    def fail_twice_then_deliver(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            raise redis.exceptions.TimeoutError("Temporary socket timeout")
+        worker.stop()
+        return [("events", [("3-0", event_fields("00000000-0000-0000-0000-000000000077"))])]
+
+    client.xreadgroup = fail_twice_then_deliver
+    worker = make_worker(client, session_factory)
+
+    worker.run_forever(poll_timeout_backoff_seconds=0.01)
+
+    assert attempts == 3
+    with session_factory() as session:
+        events = session.scalars(select(RedirectEvent)).all()
+    assert len(events) == 1
+    assert events[0].event_id == "00000000-0000-0000-0000-000000000077"
+    assert client.acknowledged == ["3-0"]
+
+
+def test_worker_responsive_shutdown_during_backoff(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = FakeRedis()
+
+    def always_timeout(*args, **kwargs):
+        raise redis.exceptions.TimeoutError("Timeout reading from socket")
+
+    client.xreadgroup = always_timeout
+    worker = make_worker(client, session_factory)
+
+    # Signal stop 0.05 seconds after starting a 5-second backoff
+    timer = threading.Timer(0.05, worker.stop)
+    timer.start()
+
+    start_time = time.monotonic()
+    worker.run_forever(poll_timeout_backoff_seconds=5.0)
+    elapsed = time.monotonic() - start_time
+    timer.cancel()
+
+    # Must exit promptly upon stop signal, well before the 5.0-second backoff expires
+    assert elapsed < 1.0
+    assert worker._stop_requested.is_set()
+
+
+def test_worker_idle_blocking_read_exceeds_old_timeout(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = FakeRedis()
+    read_called = False
+
+    def slow_idle_read(*args, **kwargs):
+        nonlocal read_called
+        read_called = True
+        worker.stop()
+        # Simulate idle stream where Redis server blocks for 0.6s (longer than old 0.5s timeout)
+        time.sleep(0.6)
+        return []
+
+    client.xreadgroup = slow_idle_read
+    worker = make_worker(client, session_factory)
+
+    start_time = time.monotonic()
+    worker.run_forever(poll_timeout_backoff_seconds=0.01)
+    elapsed = time.monotonic() - start_time
+
+    assert read_called is True
+    assert elapsed >= 0.55
+
+
+def test_worker_pending_recovery_persists_across_transient_failure(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = FakeRedis()
+    autoclaim_attempts = 0
+
+    def fail_once_then_autoclaim(*args, **kwargs):
+        nonlocal autoclaim_attempts
+        autoclaim_attempts += 1
+        if autoclaim_attempts == 1:
+            raise redis.exceptions.ConnectionError("Redis connection dropped")
+        # On second attempt, claim pending message
+        worker.stop()
+        return "0-0", [("reclaimed-2", event_fields("00000000-0000-0000-0000-000000000088"))]
+
+    client.xautoclaim = fail_once_then_autoclaim
+    worker = make_worker(client, session_factory)
+
+    worker.run_forever(poll_timeout_backoff_seconds=0.01)
+
+    assert autoclaim_attempts == 2
+    with session_factory() as session:
+        events = session.scalars(select(RedirectEvent)).all()
+    assert len(events) == 1
+    assert events[0].event_id == "00000000-0000-0000-0000-000000000088"
+    assert client.acknowledged == ["reclaimed-2"]

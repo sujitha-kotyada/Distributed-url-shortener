@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -169,3 +171,68 @@ def test_production_prefixed_environment_aliases_accept_strong_key_and_reject_de
     settings = Settings()
     assert settings.environment == "production"
     assert settings.jwt_secret_key == valid_key
+
+
+def test_settings_explicit_env_file_loads_supported_setting(tmp_path: Path) -> None:
+    env_file = tmp_path / "custom.env"
+    env_file.write_text("BASE_URL=http://test-server:9999\nRATE_LIMIT_REDIRECT_PER_MINUTE=42\n", encoding="utf-8")
+
+    settings = Settings(_env_file=env_file)
+    assert settings.base_url == "http://test-server:9999"
+    assert settings.rate_limit_redirect_per_minute == 42
+
+
+def test_settings_rejects_unknown_key_in_dotenv_file(tmp_path: Path) -> None:
+    env_file = tmp_path / "invalid.env"
+    env_file.write_text("UNKNOWN_CONFIG_SETTING=some_value\n", encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Settings(_env_file=env_file)
+
+
+def test_analytics_socket_timeout_defaults_are_safe() -> None:
+    settings = Settings()
+    assert settings.analytics_read_block_ms == 1000
+    assert settings.analytics_socket_timeout_seconds == 5.0
+    assert settings.analytics_socket_timeout_seconds > (settings.analytics_read_block_ms / 1000.0)
+
+
+def test_analytics_socket_timeout_rejects_timeout_less_than_or_equal_to_block_time() -> None:
+    # 1. Reject socket timeout strictly less than read block duration
+    with pytest.raises(ValidationError, match="must be strictly greater than analytics_read_block_ms"):
+        Settings(
+            analytics_read_block_ms=1000,
+            analytics_socket_timeout_seconds=0.5,
+        )
+
+    # 2. Reject socket timeout exactly equal to read block duration
+    with pytest.raises(ValidationError, match="must be strictly greater than analytics_read_block_ms"):
+        Settings(
+            analytics_read_block_ms=2000,
+            analytics_socket_timeout_seconds=2.0,
+        )
+
+
+def test_analytics_socket_timeout_accepts_valid_custom_values() -> None:
+    settings = Settings(
+        analytics_read_block_ms=2500,
+        analytics_socket_timeout_seconds=6.0,
+    )
+    assert settings.analytics_read_block_ms == 2500
+    assert settings.analytics_socket_timeout_seconds == 6.0
+
+
+def test_analytics_socket_timeout_env_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Test unprefixed alias
+    monkeypatch.setenv("ANALYTICS_SOCKET_TIMEOUT_SECONDS", "8.5")
+    monkeypatch.delenv("URL_SHORTENER_ANALYTICS_SOCKET_TIMEOUT_SECONDS", raising=False)
+    get_settings.cache_clear()
+    settings = Settings()
+    assert settings.analytics_socket_timeout_seconds == 8.5
+
+    # Test prefixed alias
+    monkeypatch.delenv("ANALYTICS_SOCKET_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("URL_SHORTENER_ANALYTICS_SOCKET_TIMEOUT_SECONDS", "9.5")
+    get_settings.cache_clear()
+    settings = Settings()
+    assert settings.analytics_socket_timeout_seconds == 9.5

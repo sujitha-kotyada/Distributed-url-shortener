@@ -1,7 +1,11 @@
 from functools import lru_cache
 import ipaddress
 import json
+from pathlib import Path
 from typing import Annotated, Any, Literal
+
+BACKEND_DIR = Path(__file__).resolve().parents[3]
+DEFAULT_ENV_FILE = BACKEND_DIR / ".env"
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -78,6 +82,14 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "ANALYTICS_READ_BLOCK_MS",
             "URL_SHORTENER_ANALYTICS_READ_BLOCK_MS",
+        ),
+    )
+    analytics_socket_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        validation_alias=AliasChoices(
+            "ANALYTICS_SOCKET_TIMEOUT_SECONDS",
+            "URL_SHORTENER_ANALYTICS_SOCKET_TIMEOUT_SECONDS",
         ),
     )
     analytics_batch_size: int = Field(
@@ -232,11 +244,22 @@ class Settings(BaseSettings):
                 )
         return self
 
+    @model_validator(mode="after")
+    def validate_analytics_timeouts(self) -> "Settings":
+        read_block_seconds = self.analytics_read_block_ms / 1000.0
+        if self.analytics_socket_timeout_seconds <= read_block_seconds:
+            raise ValueError(
+                f"analytics_socket_timeout_seconds ({self.analytics_socket_timeout_seconds}s) "
+                f"must be strictly greater than analytics_read_block_ms in seconds ({read_block_seconds}s)."
+            )
+        return self
+
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=DEFAULT_ENV_FILE,
         env_file_encoding="utf-8",
         env_prefix="URL_SHORTENER_",
         populate_by_name=True,
+        extra="forbid",
     )
 
 
