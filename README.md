@@ -37,7 +37,7 @@ Designed to demonstrate core distributed systems patterns: **collision-free dist
                     +-----------+------------+
                                 |
                     +-----------v------------+
-                    |   Nginx Load Balancer  | (Port 8000)
+                    |   Nginx Load Balancer  | (Port 8001)
                     +-----+------------+-----+
                           |            |
              +------------v---+    +---v------------+
@@ -124,9 +124,9 @@ Ensure Docker and Docker Compose are installed.
 | Service | Port / URL | Credentials / Notes |
 |---|---|---|
 | **Frontend Web Dashboard** | [http://localhost:3000](http://localhost:3000) | Full UI for URL creation, auth, and analytics |
-| **Nginx API Gateway** | [http://localhost:8000](http://localhost:8000) | Round-robin load balanced across API replicas |
+| **Nginx API Gateway** | [http://localhost:8001](http://localhost:8001) | Round-robin load balanced across API replicas |
 | **Internal API Replicas** | `api-1:8000`, `api-2:8000` | FastAPI backend instances (internal network) |
-| **Interactive API Docs** | [http://localhost:8000/docs](http://localhost:8000/docs) | Swagger UI |
+| **Interactive API Docs** | [http://localhost:8001/docs](http://localhost:8001/docs) | Swagger UI |
 | **Prometheus Metrics** | [http://localhost:9090](http://localhost:9090) | Metric scrapes & PromQL queries |
 | **Grafana Dashboard** | [http://localhost:3001](http://localhost:3001) | User: `admin` / Password: configured via `GRAFANA_ADMIN_PASSWORD` in root `.env` |
 
@@ -221,7 +221,7 @@ Simulate high-concurrency traffic using the Locust suite:
 ```bash
 cd load_tests
 pip install locust
-locust -f locustfile.py --headless -u 50 -r 10 --run-time 1m --host http://localhost:8000
+locust -f locustfile.py --headless -u 50 -r 10 --run-time 1m --host http://localhost:8001
 ```
 
 ---

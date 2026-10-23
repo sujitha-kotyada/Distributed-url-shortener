@@ -33,18 +33,18 @@ docker compose up -d
 To run an automated test simulating 50 concurrent users spawning at 10 users/sec for 1 minute:
 
 ```bash
-locust -f locustfile.py --headless -u 50 -r 10 --run-time 1m --host http://localhost:8000
+locust -f locustfile.py --headless -u 50 -r 10 --run-time 1m --host http://localhost:8001
 ```
 
 > **Target Host:**
-> - `http://localhost:8000`: Benchmarks through the Nginx reverse proxy load-balancing between `api-1` and `api-2`.
+> - `http://localhost:8001`: Benchmarks through the Nginx reverse proxy load-balancing between `api-1` and `api-2`.
 
 ### 2. Interactive Web UI
 
 To run with Locust's real-time browser dashboard:
 
 ```bash
-locust -f locustfile.py --host http://localhost:8000
+locust -f locustfile.py --host http://localhost:8001
 ```
 
 Open your browser to:
@@ -53,7 +53,7 @@ Open your browser to:
 Configure:
 - **Number of users**: `100`
 - **Ramp up (users started/second)**: `10`
-- **Host**: `http://localhost:8000`
+- **Host**: `http://localhost:8001`
 
 ### 3. Targeted Tagged Runs
 
@@ -61,12 +61,12 @@ You can filter tasks by tags to benchmark specific subsystems:
 
 - **Benchmark only cached redirects:**
   ```bash
-  locust -f locustfile.py --headless -u 100 -r 20 --run-time 30s --tags redirect cache_warm --host http://localhost:8000
+  locust -f locustfile.py --headless -u 100 -r 20 --run-time 30s --tags redirect cache_warm --host http://localhost:8001
   ```
 
 - **Benchmark URL creation:**
   ```bash
-  locust -f locustfile.py --headless -u 20 -r 5 --run-time 30s --tags creation --host http://localhost:8000
+  locust -f locustfile.py --headless -u 20 -r 5 --run-time 30s --tags creation --host http://localhost:8001
   ```
 
 ---

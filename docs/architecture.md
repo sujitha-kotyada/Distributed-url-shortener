@@ -11,7 +11,7 @@ The system decouples read-heavy redirect traffic from write-heavy analytical eve
 ```mermaid
 graph TD
     User([Client / Browser])
-    LB[Nginx Load Balancer :8000]
+    LB[Nginx Load Balancer :8001]
     API1[FastAPI Replica 1 :8000]
     API2[FastAPI Replica 2 :8000]
     Redis[(Redis 7 :6379<br/>Cache + Streams + Rate Limiting)]
