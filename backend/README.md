@@ -70,10 +70,27 @@ Each successful redirect records one `redirect_events` row with the resolved
 URL's stable `short_code` and a server-generated UTC `occurred_at` timestamp.
 Unknown short codes and health or URL creation requests do not create events.
 
-Analytics persistence is synchronous and best effort: a failed analytics write
-is rolled back and logged while the valid redirect still succeeds. An event may
-therefore be lost when the write fails; guaranteed delivery and background
-processing are not implemented yet.
+The redirect API publishes a minimal event containing `event_id`, `short_code`,
+and `occurred_at` to the configured Redis Stream. A separate worker consumes
+that stream through a Redis consumer group and persists the event. The worker
+acknowledges a message only after the PostgreSQL commit succeeds. Pending
+messages can be reclaimed after the configured idle period, and the unique
+event ID makes reprocessing idempotent.
+
+Configure `REDIS_URL`, `ANALYTICS_STREAM_NAME`, `ANALYTICS_CONSUMER_GROUP`,
+`ANALYTICS_CONSUMER_NAME`, `ANALYTICS_READ_BLOCK_MS`, `ANALYTICS_BATCH_SIZE`,
+and `ANALYTICS_CLAIM_IDLE_MS` in `.env`. Run the worker separately from the API:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m url_shortener.services.analytics_worker
+```
+
+Publishing is best effort: if Redis is unavailable, the redirect still returns
+307 but that event can be lost. Processing is at-least-once rather than
+exactly-once; idempotency prevents duplicate rows after redelivery. There is
+no live Redis verification in this development environment when Redis is not
+running, and no background worker is started inside the API process.
 
 ## Run Tests
 
