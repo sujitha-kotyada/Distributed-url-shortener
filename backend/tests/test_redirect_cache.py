@@ -131,3 +131,97 @@ def test_redis_cache_uses_namespaced_key_and_ttl() -> None:
         "https://example.com/ttl",
         ex=300,
     )
+
+
+def test_cache_hit_increments_cache_hits_counter() -> None:
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+
+    cache = FakeRedirectCache()
+    cache.values["hit-code"] = "https://example.com/hit"
+    session = Mock()
+    collector = PrometheusMetricsCollector()
+
+    result = resolve_redirect_target(
+        session=session,
+        short_code="hit-code",
+        cache=cache,
+        metrics=collector,
+    )
+
+    assert result == "https://example.com/hit"
+    assert collector.cache_hits_total == 1
+    assert collector.cache_misses_total == 0
+
+
+def test_cache_miss_increments_cache_misses_counter() -> None:
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+
+    cache = FakeRedirectCache()
+    session = Mock()
+    session.scalar.return_value = Url(
+        id=1,
+        short_code="miss-code",
+        original_url="https://example.com/miss",
+    )
+    collector = PrometheusMetricsCollector()
+
+    result = resolve_redirect_target(
+        session=session,
+        short_code="miss-code",
+        cache=cache,
+        metrics=collector,
+    )
+
+    assert result == "https://example.com/miss"
+    assert collector.cache_hits_total == 0
+    assert collector.cache_misses_total == 1
+
+
+def test_unusable_empty_cache_entry_increments_cache_misses_counter() -> None:
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+
+    cache = FakeRedirectCache()
+    cache.values["empty-code"] = ""
+    session = Mock()
+    session.scalar.return_value = Url(
+        id=1,
+        short_code="empty-code",
+        original_url="https://example.com/fallback",
+    )
+    collector = PrometheusMetricsCollector()
+
+    result = resolve_redirect_target(
+        session=session,
+        short_code="empty-code",
+        cache=cache,
+        metrics=collector,
+    )
+
+    assert result == "https://example.com/fallback"
+    assert collector.cache_hits_total == 0
+    assert collector.cache_misses_total == 1
+
+
+def test_cache_read_failure_does_not_increment_hit_or_miss() -> None:
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+
+    cache = FakeRedirectCache()
+    cache.read_error = True
+    session = Mock()
+    session.scalar.return_value = Url(
+        id=1,
+        short_code="err-code",
+        original_url="https://example.com/err-fallback",
+    )
+    collector = PrometheusMetricsCollector()
+
+    result = resolve_redirect_target(
+        session=session,
+        short_code="err-code",
+        cache=cache,
+        metrics=collector,
+    )
+
+    assert result == "https://example.com/err-fallback"
+    assert collector.cache_hits_total == 0
+    assert collector.cache_misses_total == 0

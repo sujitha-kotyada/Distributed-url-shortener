@@ -511,3 +511,89 @@ def test_worker_pending_recovery_persists_across_transient_failure(
     assert len(events) == 1
     assert events[0].event_id == "00000000-0000-0000-0000-000000000088"
     assert client.acknowledged == ["reclaimed-2"]
+
+
+def test_worker_increments_processed_metric_on_successful_event(
+    session_factory: sessionmaker[Session],
+) -> None:
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+
+    client = FakeRedis([("msg-1", event_fields("00000000-0000-0000-0000-000000000099"))])
+    collector = PrometheusMetricsCollector()
+    worker = RedirectAnalyticsWorker(
+        client=client,
+        session_factory=session_factory,
+        stream_name="events",
+        group_name="analytics",
+        consumer_name="worker-1",
+        metrics=collector,
+    )
+
+    worker.process_available()
+
+    assert collector.worker_processed_total == 1
+    assert collector.worker_failed_total == 0
+    assert collector.worker_dead_lettered_total == 0
+    assert client.acknowledged == ["msg-1"]
+
+
+def test_worker_increments_failed_and_dlq_metrics(
+    session_factory: sessionmaker[Session],
+) -> None:
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+
+    client = FakeRedis()
+    collector = PrometheusMetricsCollector()
+    worker = RedirectAnalyticsWorker(
+        client=client,
+        session_factory=session_factory,
+        stream_name="events",
+        group_name="analytics",
+        consumer_name="worker-1",
+        analytics=FailingAnalytics(),
+        max_retries=2,
+        metrics=collector,
+    )
+
+    fields = event_fields("00000000-0000-0000-0000-000000000077")
+    res1 = worker.process_message("fail-1", fields)
+    assert res1 is False
+    assert collector.worker_failed_total == 1
+    assert collector.worker_dead_lettered_total == 0
+
+    res2 = worker.process_message("fail-1", fields)
+    assert res2 is True
+    assert collector.worker_failed_total == 2
+    assert collector.worker_dead_lettered_total == 1
+    assert len(client.added) == 1
+
+
+def test_worker_metrics_server_lifecycle_and_endpoints() -> None:
+    import urllib.request
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+    from url_shortener.services.analytics_worker import WorkerMetricsServer
+
+    collector = PrometheusMetricsCollector()
+    collector.increment_worker_processed()
+    collector.increment_worker_processed()
+
+    server = WorkerMetricsServer(host="127.0.0.1", port=0, collector=collector)
+    port = server.server.server_port
+    server.start()
+
+    try:
+        metrics_url = f"http://127.0.0.1:{port}/metrics"
+        with urllib.request.urlopen(metrics_url) as resp:
+            assert resp.status == 200
+            assert "text/plain" in resp.headers["content-type"]
+            body = resp.read().decode("utf-8")
+            assert "url_shortener_worker_processed_total 2" in body
+
+        health_url = f"http://127.0.0.1:{port}/health"
+        with urllib.request.urlopen(health_url) as resp:
+            assert resp.status == 200
+            assert "application/json" in resp.headers["content-type"]
+            body = resp.read().decode("utf-8")
+            assert '"status":"ok"' in body
+    finally:
+        server.stop()

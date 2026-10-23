@@ -37,7 +37,7 @@
       "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "sum(url_shortener_cache_hits_total) / (sum(url_shortener_cache_hits_total) + sum(url_shortener_cache_misses_total)) * 100",
+          "expr": "((sum(url_shortener_cache_hits_total) / ((sum(url_shortener_cache_hits_total) + sum(url_shortener_cache_misses_total)) > 0)) * 100) or vector(0)",
           "refId": "A"
         }
       ]

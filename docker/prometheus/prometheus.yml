@@ -9,3 +9,10 @@ scrape_configs:
       - targets: ["api-1:8000", "api-2:8000"]
         labels:
           group: "backend_cluster"
+
+  - job_name: "url_shortener_worker"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["worker:8000"]
+        labels:
+          group: "analytics_worker"

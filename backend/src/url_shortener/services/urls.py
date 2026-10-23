@@ -5,6 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from url_shortener.core.cache import RedirectCache, RedisCacheError
+from url_shortener.core.metrics import PrometheusMetricsCollector
 from url_shortener.models.url import Url
 from url_shortener.utils.base62 import encode_base62
 
@@ -34,14 +35,22 @@ def resolve_redirect_target(
     session: Session,
     short_code: str,
     cache: RedirectCache | None,
+    metrics: PrometheusMetricsCollector | None = None,
 ) -> str | None:
+    collector = metrics or PrometheusMetricsCollector.get_instance()
     if cache is not None:
+        redis_error = False
         try:
             cached_url = cache.get(short_code)
         except RedisCacheError:
             cached_url = None
-        if cached_url is not None:
+            redis_error = True
+
+        if cached_url:
+            collector.increment_cache_hit()
             return cached_url
+        elif not redis_error:
+            collector.increment_cache_miss()
 
     url = get_url_by_short_code(session=session, short_code=short_code)
     if url is None:

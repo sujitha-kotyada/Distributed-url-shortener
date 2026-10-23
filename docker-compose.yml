@@ -120,6 +120,7 @@ services:
       ANALYTICS_MAX_RETRIES: 3
       ANALYTICS_READ_BLOCK_MS: ${ANALYTICS_READ_BLOCK_MS:-1000}
       ANALYTICS_SOCKET_TIMEOUT_SECONDS: ${ANALYTICS_SOCKET_TIMEOUT_SECONDS:-5.0}
+      ANALYTICS_METRICS_PORT: ${ANALYTICS_METRICS_PORT:-8000}
       LOG_LEVEL: INFO
     depends_on:
       postgres:
@@ -167,6 +168,7 @@ services:
     depends_on:
       - api-1
       - api-2
+      - worker
     networks:
       - url_shortener_network
 

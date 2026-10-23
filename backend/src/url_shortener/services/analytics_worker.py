@@ -3,7 +3,8 @@ import logging
 import signal
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from threading import Event
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Event, Thread
 
 import redis
 from pydantic import ValidationError
@@ -11,6 +12,7 @@ from redis.exceptions import ResponseError
 
 from url_shortener.core.config import Settings
 from url_shortener.core.database import create_session_factory
+from url_shortener.core.metrics import PrometheusMetricsCollector
 from url_shortener.services.analytics import (
     AnalyticsRecordingError,
     PostgresRedirectAnalytics,
@@ -49,6 +51,7 @@ class RedirectAnalyticsWorker:
         batch_size: int = 10,
         claim_idle_ms: int = 60000,
         analytics: PostgresRedirectAnalytics | None = None,
+        metrics: PrometheusMetricsCollector | None = None,
     ) -> None:
         self._client = client
         self._session_factory = session_factory
@@ -61,6 +64,7 @@ class RedirectAnalyticsWorker:
         self._batch_size = batch_size
         self._claim_idle_ms = claim_idle_ms
         self._analytics = analytics or PostgresRedirectAnalytics()
+        self._metrics = metrics or PrometheusMetricsCollector()
         self._stop_requested = Event()
         self._retry_counts: dict[str, int] = {}
 
@@ -127,6 +131,7 @@ class RedirectAnalyticsWorker:
             event = RedirectEventMessage.model_validate(fields)
         except ValidationError as exc:
             logger.warning("Permanent validation error in redirect analytics event %s: %s", message_id, exc)
+            self._metrics.increment_worker_dlq()
             return self._dead_letter(
                 message_id,
                 fields,
@@ -138,6 +143,7 @@ class RedirectAnalyticsWorker:
             with self._session_factory() as session:
                 self._analytics.record_event(session=session, event=event)
         except AnalyticsRecordingError as exc:
+            self._metrics.increment_worker_failed()
             local_attempts = self._retry_counts.get(message_id, 0) + 1
             self._retry_counts[message_id] = local_attempts
             redis_delivery_count = self._get_delivery_count(message_id)
@@ -150,6 +156,7 @@ class RedirectAnalyticsWorker:
                     message_id,
                     attempts,
                 )
+                self._metrics.increment_worker_dlq()
                 return self._dead_letter(
                     message_id,
                     fields,
@@ -166,9 +173,11 @@ class RedirectAnalyticsWorker:
         try:
             self._client.xack(self._stream_name, self._group_name, message_id)
         except redis.RedisError:
+            self._metrics.increment_worker_failed()
             logger.warning("Redirect analytics acknowledgement failed.")
             return False
 
+        self._metrics.increment_worker_processed()
         self._retry_counts.pop(message_id, None)
         return True
 
@@ -239,10 +248,63 @@ class RedirectAnalyticsWorker:
                     break
 
 
+def create_worker_metrics_handler(collector: PrometheusMetricsCollector) -> type[BaseHTTPRequestHandler]:
+    class WorkerMetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/metrics":
+                body = collector.generate_prometheus_text().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif self.path in {"/health", "/healthz"}:
+                body = b'{"status":"ok","service":"analytics_worker"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format: str, *args) -> None:
+            pass
+
+    return WorkerMetricsHandler
+
+
+class WorkerMetricsServer:
+    def __init__(
+        self,
+        *,
+        host: str = "0.0.0.0",
+        port: int = 8000,
+        collector: PrometheusMetricsCollector | None = None,
+    ) -> None:
+        self.collector = collector or PrometheusMetricsCollector()
+        self.host = host
+        self.port = port
+        handler_cls = create_worker_metrics_handler(self.collector)
+        self.server = HTTPServer((self.host, self.port), handler_cls)
+        self._thread = Thread(target=self.server.serve_forever, daemon=True)
+
+    def start(self) -> None:
+        logger.info("Starting worker metrics HTTP server on %s:%d", self.host, self.port)
+        self._thread.start()
+
+    def stop(self) -> None:
+        logger.info("Stopping worker metrics HTTP server")
+        self.server.shutdown()
+        self.server.server_close()
+
+
 def create_worker(
     settings: Settings,
     *,
     session_factory=None,
+    metrics: PrometheusMetricsCollector | None = None,
 ) -> RedirectAnalyticsWorker:
     if settings.redis_url is None:
         raise RuntimeError("REDIS_URL must be set to run the analytics worker.")
@@ -263,6 +325,7 @@ def create_worker(
         read_block_ms=settings.analytics_read_block_ms,
         batch_size=settings.analytics_batch_size,
         claim_idle_ms=settings.analytics_claim_idle_ms,
+        metrics=metrics,
     )
 
 
@@ -272,7 +335,21 @@ def main() -> None:
 
     settings = get_settings()
     configure_logging(settings.log_level)
-    worker = create_worker(settings)
+    collector = PrometheusMetricsCollector()
+    worker = create_worker(settings, metrics=collector)
+
+    metrics_server: WorkerMetricsServer | None = None
+    metrics_port = getattr(settings, "analytics_metrics_port", None)
+    if metrics_port:
+        try:
+            metrics_server = WorkerMetricsServer(
+                host="0.0.0.0",
+                port=metrics_port,
+                collector=collector,
+            )
+            metrics_server.start()
+        except Exception as exc:
+            logger.warning("Failed to start worker metrics server: %s", exc)
 
     def handle_signal(signum, frame) -> None:
         logger.info("Received termination signal %s, stopping worker...", signum)
@@ -290,6 +367,8 @@ def main() -> None:
         worker.stop()
     finally:
         worker.close()
+        if metrics_server is not None:
+            metrics_server.stop()
 
 
 if __name__ == "__main__":

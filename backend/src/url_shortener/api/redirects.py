@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from url_shortener.api.deps import get_client_ip
 from url_shortener.core.config import get_settings
 from url_shortener.core.database import get_session
+from url_shortener.core.metrics import PrometheusMetricsCollector
 from url_shortener.services.analytics import RedirectEventMessage
 from url_shortener.services.streams import AnalyticsPublishError
 from url_shortener.services.urls import UrlLookupError, resolve_redirect_target
@@ -79,6 +80,8 @@ def redirect_short_url(
             publisher.publish(event)
         except AnalyticsPublishError:
             logger.warning("Redirect analytics event was not published.")
+
+    PrometheusMetricsCollector.get_instance().increment_redirect()
 
     return RedirectResponse(
         url=original_url,

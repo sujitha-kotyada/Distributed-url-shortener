@@ -236,3 +236,25 @@ def test_analytics_socket_timeout_env_aliases(monkeypatch: pytest.MonkeyPatch) -
     get_settings.cache_clear()
     settings = Settings()
     assert settings.analytics_socket_timeout_seconds == 9.5
+
+
+def test_analytics_metrics_port_defaults_and_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANALYTICS_METRICS_PORT", raising=False)
+    monkeypatch.delenv("URL_SHORTENER_ANALYTICS_METRICS_PORT", raising=False)
+    monkeypatch.delenv("WORKER_METRICS_PORT", raising=False)
+    get_settings.cache_clear()
+
+    settings = Settings()
+    assert settings.analytics_metrics_port == 8000
+
+    monkeypatch.setenv("ANALYTICS_METRICS_PORT", "9095")
+    get_settings.cache_clear()
+    assert Settings().analytics_metrics_port == 9095
+
+    monkeypatch.delenv("ANALYTICS_METRICS_PORT", raising=False)
+    monkeypatch.setenv("WORKER_METRICS_PORT", "9096")
+    get_settings.cache_clear()
+    assert Settings().analytics_metrics_port == 9096
+
+    with pytest.raises(ValidationError):
+        Settings(analytics_metrics_port=80)

@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-BACKEND_DIR = Path(__file__).resolve().parents[3]
-DEFAULT_ENV_FILE = BACKEND_DIR / ".env"
-
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parents[3]
+DEFAULT_ENV_FILE = BACKEND_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -131,6 +131,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "ANALYTICS_MAX_RETRIES",
             "URL_SHORTENER_ANALYTICS_MAX_RETRIES",
+        ),
+    )
+    analytics_metrics_port: int = Field(
+        default=8000,
+        ge=1024,
+        le=65535,
+        validation_alias=AliasChoices(
+            "ANALYTICS_METRICS_PORT",
+            "URL_SHORTENER_ANALYTICS_METRICS_PORT",
+            "WORKER_METRICS_PORT",
         ),
     )
     jwt_secret_key: str = Field(

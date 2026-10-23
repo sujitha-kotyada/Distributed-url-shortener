@@ -26,3 +26,44 @@ def test_metrics_endpoint_returns_prometheus_format():
     assert "url_shortener_redirects_total" in content
     assert "url_shortener_cache_hits_total" in content
     assert "url_shortener_cache_misses_total" in content
+
+
+def test_redirect_increments_redirects_total_on_success() -> None:
+    from unittest.mock import Mock
+    from url_shortener.core.database import get_session
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+    from url_shortener.models.url import Url
+
+    app = create_app()
+    collector = PrometheusMetricsCollector.get_instance()
+    initial_redirects = collector.redirects_total
+
+    session = Mock()
+    session.scalar.return_value = Url(id=1, short_code="success", original_url="https://example.com/target")
+    app.dependency_overrides[get_session] = lambda: session
+
+    client = TestClient(app)
+    response = client.get("/success", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert collector.redirects_total == initial_redirects + 1
+
+
+def test_redirect_does_not_increment_redirects_total_on_404() -> None:
+    from unittest.mock import Mock
+    from url_shortener.core.database import get_session
+    from url_shortener.core.metrics import PrometheusMetricsCollector
+
+    app = create_app()
+    collector = PrometheusMetricsCollector.get_instance()
+    initial_redirects = collector.redirects_total
+
+    session = Mock()
+    session.scalar.return_value = None
+    app.dependency_overrides[get_session] = lambda: session
+
+    client = TestClient(app)
+    response = client.get("/not-found-code", follow_redirects=False)
+
+    assert response.status_code == 404
+    assert collector.redirects_total == initial_redirects
